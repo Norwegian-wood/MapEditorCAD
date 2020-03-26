@@ -14,6 +14,7 @@ using System.Threading.Tasks;
 
 namespace MapEditorCAD
 {
+
     public class Map
     {
         public string MapName = "";
@@ -21,7 +22,13 @@ namespace MapEditorCAD
         public double y = -1;
         public double width = -1;
         public double height = -1;
-        public ObjectId ID = new ObjectId();
+        public ObjectId ID;
+    }
+    public class WorldMap
+    {
+        public double width = -1;
+        public double height = -1;
+        public Dictionary<string, List<Map>> maps;
     }
     public class MapEditor
     {
@@ -30,14 +37,16 @@ namespace MapEditorCAD
         private string mapDir;
         private string CurrentWorldMap;
         private string CurrentLayer;
+        private Point2d P;
+        private ObjectId WorldEdgeRect;
         Editor ed;
         //key1 大地图名称
         //Key2 layer
 
-        private Dictionary<string,Dictionary<string,List<Map>>> AllMap;
+        private Dictionary<string, WorldMap> AllMap;
         public MapEditor()
         {
-            AllMap = new Dictionary<string, Dictionary<string, List<Map>>>();
+            AllMap = new Dictionary<string, WorldMap>();
             mapDir = debugPath+ "\\ZhuxianClient\\gamedata\\mapdata";
             ed = Application.DocumentManager.MdiActiveDocument.Editor;
         }
@@ -51,30 +60,36 @@ namespace MapEditorCAD
                 JObject jstr = JObject.Parse(content);
                 foreach (var pair in jstr)
                 {
-                    Dictionary<string, List<Map>> Dic = new Dictionary<string, List<Map>>();
-                    foreach (var pair2 in pair.Value as JObject)
+                    WorldMap WMap = new WorldMap { maps = new Dictionary<string, List<Map>>() };
+                    WMap.width = Convert.ToDouble((pair.Value as JObject)["width"].ToString());
+                    WMap.height = Convert.ToDouble((pair.Value as JObject)["height"].ToString());
+                    foreach (KeyValuePair<string,JToken> pair2 in pair.Value["maps"] as JObject)
                     {
-                        List<Map> list = new List<Map>();
-                        foreach (var m in pair2.Value as JArray)
+                        List<Map> mapList = new List<Map>();
+                        JArray Jar = pair2.Value as JArray;
+                        foreach (JObject m in Jar)
                         {
                             Map map = new Map();
-                            map.x = Convert.ToDouble( m["x"].ToString());
+                            map.x = Convert.ToDouble(m["x"].ToString());
                             map.y = Convert.ToDouble(m["y"].ToString());
                             map.width = Convert.ToDouble(m["width"].ToString());
                             map.height = Convert.ToDouble(m["height"].ToString());
                             map.MapName = m["mapName"].ToString();
-                            list.Add(map);
+                            mapList.Add(map);
                         }
-                        Dic.Add(pair2.Key, list);
+                        WMap.maps.Add(pair2.Key, mapList);
                     }
-                    AllMap.Add(pair.Key, Dic);
+                    AllMap.Add(pair.Key, WMap);
                 }
             }
             else
             {
                 if (debug)
                 {
-                    Dictionary<string, List<Map>> Dic = new Dictionary<string, List<Map>>();
+                    WorldMap WMap = new WorldMap() { maps = new Dictionary<string, List<Map>>() };
+                    WMap.width = 1000;
+                    WMap.height = 1000;
+                    //Dictionary<string, List<Map>> Dic = new Dictionary<string, List<Map>>();
                     string[] layers = { "B2", "B1", "Ground", "F1", "F2" };
                     foreach (string layer in layers)
                     {
@@ -92,9 +107,9 @@ namespace MapEditorCAD
                                 maps.Add(m);
                             }
                         }
-                        Dic.Add(layer, maps);
+                        WMap.maps.Add(layer, maps);
                     }
-                    AllMap.Add("大世界", Dic);
+                    AllMap.Add("大世界", WMap);
                 }
                 else
                 {
@@ -121,10 +136,13 @@ namespace MapEditorCAD
             JObject alldata = new JObject();
             foreach (var pair in AllMap)
             {
-                JObject mapData = new JObject();
-                foreach (var pair2 in pair.Value)
+                JObject WorldmapData = new JObject();
+                WorldmapData.Add("width", pair.Value.width);
+                WorldmapData.Add("height", pair.Value.height);
+                JObject layerData = new JObject();
+                foreach (var pair2 in pair.Value.maps)
                 {
-                    JArray layerData = new JArray();
+                    JArray mapData = new JArray();
                     foreach (var iter in pair2.Value)
                     {
                         JObject aMap = new JObject();
@@ -134,19 +152,18 @@ namespace MapEditorCAD
                         aMap.Add("y", iter.y);
                         aMap.Add("width", iter.width);
                         aMap.Add("height", iter.height);
-                        layerData.Add(aMap);
+                        mapData.Add(aMap);
                     }
-                    mapData.Add(pair2.Key, layerData);
+                    layerData.Add(pair2.Key, mapData);
                 }
-                alldata.Add(pair.Key, mapData);
+                WorldmapData.Add("maps", layerData);
+                alldata.Add(pair.Key, WorldmapData);
             }
             sw.Write(alldata.ToString());
             sw.Flush();
         }
+
         
-        //RasterImage image;
-        //string strImgName = "11111";
-        //string strFileName = "C:\\Users\\ff\\Desktop\\11111.png";
         ObjectId imageID;
         [CommandMethod("InputMap")]
         public void InputMap()
@@ -160,12 +177,10 @@ namespace MapEditorCAD
             //Point3d point2 = new Point3d(100, 0, 0);
             //line1.StartPoint = point1;
             //line1.EndPoint = point2;
-            //Document doc = Application.DocumentManager.MdiActiveDocument;
-            //Database db = doc.Database;
+
             //using (Transaction trans = db.TransactionManager.StartTransaction())
             //{
-            //    BlockTable bt = trans.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
-            //    BlockTableRecord btr = trans.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
+
             //    btr.AppendEntity(line1);
             //    trans.AddNewlyCreatedDBObject(line1,true);
             //    trans.Commit();
@@ -174,12 +189,12 @@ namespace MapEditorCAD
             // Get the current database and start a transaction
             Database acCurDb;
             acCurDb = Application.DocumentManager.MdiActiveDocument.Database;
-            ReadMapData();
+           
             using (Transaction acTrans = acCurDb.TransactionManager.StartTransaction())
             {
                 // Define the name and image to use
 
-                ReadMapData();
+                
                 RasterImageDef acRasterDef;
                 bool bRasterDefCreated = false;
                 ObjectId acImgDefId;
@@ -196,8 +211,59 @@ namespace MapEditorCAD
                 // Open the image dictionary
                 DBDictionary acImgDict = acTrans.GetObject(acImgDctID, OpenMode.ForRead) as DBDictionary;
 
-                // Check to see if the image definition already exists
-                foreach (var iter in AllMap[WolrdMapName][layer])
+                
+                ReadMapData();
+
+                //创建世界地图的边缘矩形
+                Document doc = Application.DocumentManager.MdiActiveDocument;
+                Database db = doc.Database;
+                BlockTable bt = acTrans.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable;
+                BlockTableRecord btr = acTrans.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForWrite) as BlockTableRecord;
+
+                double worldWidth = AllMap[CurrentWorldMap].width;
+                double worldHeight = AllMap[CurrentWorldMap].height;
+
+                Point2d p1 = new Point2d(0, 0);
+                Point2d p2 = new Point2d(worldWidth, 0);
+                Point2d p3 = new Point2d(worldWidth, worldHeight);
+                Point2d p4 = new Point2d(0, worldHeight);
+                Polyline Rect = new Polyline();
+                Rect.AddVertexAt(0, p1, 0, 0, 0);
+                Rect.AddVertexAt(1, p2, 0, 0, 0);
+                Rect.AddVertexAt(2, p3, 0, 0, 0);
+                Rect.AddVertexAt(3, p4, 0, 0, 0);
+                
+                Rect.Closed = true;
+                WorldEdgeRect = btr.AppendEntity(Rect);
+                acTrans.AddNewlyCreatedDBObject(Rect, true);
+                //Line line1 = new Line() { StartPoint = new Point3d(0, 0, 0), EndPoint = new Point3d(worldWidth, 0, 0) };
+                //Line line2 = new Line() { StartPoint = new Point3d(0, worldWidth, 0), EndPoint = new Point3d(worldWidth, worldHeight, 0) };
+                //Line line3 = new Line() { StartPoint = new Point3d(worldWidth, worldHeight, 0), EndPoint = new Point3d(0, worldHeight, 0) };
+                //Line line4 = new Line() { StartPoint = new Point3d(0, worldHeight, 0), EndPoint = new Point3d(0, 0, 0) };
+                //btr.AppendEntity(line1);
+                //btr.AppendEntity(line2);
+                //btr.AppendEntity(line3);
+                //btr.AppendEntity(line4);
+                //acTrans.AddNewlyCreatedDBObject(line1, true);
+                //acTrans.AddNewlyCreatedDBObject(line2, true);
+                //acTrans.AddNewlyCreatedDBObject(line3, true);
+                //acTrans.AddNewlyCreatedDBObject(line4, true);
+                //Entity ent1 = (Entity)line1;
+                //Entity ent2 = (Entity)line2;
+                //Entity ent3 = (Entity)line3;
+                //Entity ent4 = (Entity)line4;
+                //Group group = new Group();
+                //group.Append(ent1.ObjectId);
+                //group.Append(ent2.ObjectId);
+                //group.Append(ent3.ObjectId);
+                //group.Append(ent4.ObjectId);
+                //DBDictionary groupdic = acTrans.GetObject(db.GroupDictionaryId, OpenMode.ForWrite) as DBDictionary;
+                //group.Selectable = true;
+                //group.Name = "mapEdge";
+                //groupdic.SetAt(group.Name, group);
+                //acTrans.AddNewlyCreatedDBObject(group, true);
+                //~创建世界地图的边缘矩形
+                foreach (var iter in AllMap[WolrdMapName].maps[layer])
                 {
                     string strImgName = iter.MapName;
                     string strFileName = mapDir + "\\" + iter.MapName + "\\" + layer + ".png";
@@ -329,7 +395,11 @@ namespace MapEditorCAD
             }
             using (Transaction acTrans = acCurDb.TransactionManager.StartTransaction())
             {
-                foreach (var Map in AllMap[CurrentWorldMap][CurrentLayer])
+                Polyline Rect = WorldEdgeRect.GetObject(OpenMode.ForRead) as Polyline;
+                Point2d pmax = Rect.GetPoint2dAt(2);
+                AllMap[CurrentWorldMap].width = pmax.X;
+                AllMap[CurrentWorldMap].height = pmax.Y;
+                foreach (var Map in AllMap[CurrentWorldMap].maps[CurrentLayer])
                 {
                     if (!Map.ID.IsNull)
                     {
