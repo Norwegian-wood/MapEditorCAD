@@ -3,6 +3,9 @@ using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.Runtime;
+using Autodesk.AutoCAD.GraphicsSystem;
+using Autodesk.AutoCAD.GraphicsInterface;
+using Autodesk.AutoCAD.PlottingServices;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
@@ -10,6 +13,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Drawing;
 
 
 namespace MapEditorCAD
@@ -32,6 +36,8 @@ namespace MapEditorCAD
     }
     public class MapEditor
     {
+        static Point3d _extMax = Point3d.Origin;
+        static Point3d _extMin = Point3d.Origin;
         static bool debug = true;
         static string debugPath = "C:\\nzx";
         private string mapDir;
@@ -227,15 +233,15 @@ namespace MapEditorCAD
                 Point2d p2 = new Point2d(worldWidth, 0);
                 Point2d p3 = new Point2d(worldWidth, worldHeight);
                 Point2d p4 = new Point2d(0, worldHeight);
-                Polyline Rect = new Polyline();
-                Rect.AddVertexAt(0, p1, 0, 0, 0);
-                Rect.AddVertexAt(1, p2, 0, 0, 0);
-                Rect.AddVertexAt(2, p3, 0, 0, 0);
-                Rect.AddVertexAt(3, p4, 0, 0, 0);
-                
-                Rect.Closed = true;
-                WorldEdgeRect = btr.AppendEntity(Rect);
-                acTrans.AddNewlyCreatedDBObject(Rect, true);
+                Autodesk.AutoCAD.DatabaseServices.Polyline RectPoly = new Autodesk.AutoCAD.DatabaseServices.Polyline();
+                RectPoly.AddVertexAt(0, p1, 0, 0, 0);
+                RectPoly.AddVertexAt(1, p2, 0, 0, 0);
+                RectPoly.AddVertexAt(2, p3, 0, 0, 0);
+                RectPoly.AddVertexAt(3, p4, 0, 0, 0);
+
+                RectPoly.Closed = true;
+                WorldEdgeRect = btr.AppendEntity(RectPoly);
+                acTrans.AddNewlyCreatedDBObject(RectPoly, true);
                 //Line line1 = new Line() { StartPoint = new Point3d(0, 0, 0), EndPoint = new Point3d(worldWidth, 0, 0) };
                 //Line line2 = new Line() { StartPoint = new Point3d(0, worldWidth, 0), EndPoint = new Point3d(worldWidth, worldHeight, 0) };
                 //Line line3 = new Line() { StartPoint = new Point3d(worldWidth, worldHeight, 0), EndPoint = new Point3d(0, worldHeight, 0) };
@@ -377,6 +383,8 @@ namespace MapEditorCAD
 
                 // Dispose of the transaction
             }
+            
+            
         }
         [CommandMethod("OutputMap")]
         public void OutputMap()
@@ -395,7 +403,7 @@ namespace MapEditorCAD
             }
             using (Transaction acTrans = acCurDb.TransactionManager.StartTransaction())
             {
-                Polyline Rect = WorldEdgeRect.GetObject(OpenMode.ForRead) as Polyline;
+                Autodesk.AutoCAD.DatabaseServices.Polyline Rect = WorldEdgeRect.GetObject(OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Polyline;
                 Point2d pmax = Rect.GetPoint2dAt(2);
                 AllMap[CurrentWorldMap].width = pmax.X;
                 AllMap[CurrentWorldMap].height = pmax.Y;
@@ -425,8 +433,208 @@ namespace MapEditorCAD
                     }  
                 }
                 WriteMapData();
+                // Open the Block table for read
+                BlockTable acBlkTbl;
+                acBlkTbl = acTrans.GetObject(acCurDb.BlockTableId, OpenMode.ForRead) as BlockTable;
+
+                // Open the Block table record Model space for write
+                BlockTableRecord acBlkTblRec;
+                acBlkTblRec = acTrans.GetObject(acBlkTbl[BlockTableRecord.ModelSpace],
+                                                OpenMode.ForRead) as BlockTableRecord;
+                System.Drawing.Image img = null;
+                string name = acBlkTblRec.Name;
+                if (!String.IsNullOrEmpty(name))
+                {
+                     img = GetBlockImageFromDrawing(name);
+                    
+                }
+                string path = mapDir + "\\" + CurrentWorldMap + "_" + CurrentLayer + ".bmp";
+                if (File.Exists(path))
+                {
+                    try
+                    {
+                        File.Delete(path);
+                    }
+                    catch (System.Exception ex)
+                    {
+                        ed.WriteMessage(path + "  被占用，请重试");
+                    }
+                }
+                try
+                {
+                    if (img != null)
+                    {
+                        img.Save(path);
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    ed.WriteMessage(path + "  被占用，请重试");
+                }
             }
            
         }
+        public static System.Drawing.Image GetBlockImageFromDrawing(string blockName)
+        {
+            System.Drawing.Bitmap blockBmp = null;
+
+            Database db = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.Database;
+            Document doc = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument;
+
+            ObjectId BlockId = ObjectId.Null;
+
+            using (Transaction nativeTrans = db.TransactionManager.StartTransaction())
+            {
+                using (BlockTable bt = nativeTrans.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable)
+                {
+                    if (bt.Has(blockName))
+                    {
+                        BlockId = bt[blockName];
+                    }
+                }
+            }
+
+            Manager gsm = doc.GraphicsManager;
+
+            // now set the block sizes to something standard
+            Point2d screenSize = (Point2d)Autodesk.AutoCAD.ApplicationServices.Application.GetSystemVariable("SCREENSIZE");
+
+            // set up the image sizes
+            int width = (int)screenSize.X;
+            int height = (int)screenSize.Y;
+
+            // now create an off screen device
+            KernelDescriptor descriptor = new KernelDescriptor();
+
+            descriptor.addRequirement(Autodesk.AutoCAD.UniqueString.Intern("3D Drawing"));
+            GraphicsKernel kernal = Manager.AcquireGraphicsKernel(descriptor);
+            using (Device offDevice = gsm.CreateAutoCADOffScreenDevice(kernal))
+            {
+                // now size the device
+                offDevice.OnSize(new System.Drawing.Size(width, height));
+
+                // now create the view
+                using (View view = new View())
+                {
+                    // add the new view object to the device
+                    offDevice.Add(view);
+
+                    // update it
+                    offDevice.Update();
+
+                    // ok now create the model
+                    using (Model model = gsm.CreateAutoCADModel(kernal))
+                    {
+                        using (Transaction nativeTrans = db.TransactionManager.StartTransaction())
+                        {
+                            using (BlockTable bt = nativeTrans.GetObject(db.BlockTableId, OpenMode.ForRead) as BlockTable)
+                            {
+                                // now iterate through our block tables
+                                foreach (ObjectId id in bt)
+                                {
+                                    if (id == BlockId)
+                                    {
+                                        // open the btr for read
+                                        using (BlockTableRecord btr = nativeTrans.GetObject(id, OpenMode.ForRead) as BlockTableRecord)
+                                        {
+
+                                            // add the btr to the view
+                                            view.Add(btr, model);
+
+                                            try
+                                            {
+                                                // get the extents of the btr
+                                                Extents3d extents = new Extents3d();
+                                                Vector3d buffer = new Vector3d(2, 2, 0);
+                                                extents.AddBlockExtents(btr);
+
+                                                _extMin = extents.MinPoint;
+                                                _extMax = extents.MaxPoint;
+                                                SetViewTo(view, db);
+
+                                                // snap the image                          
+                                                System.Drawing.Rectangle rect = new System.Drawing.Rectangle(0, 0, width, height);
+
+                                                blockBmp = view.GetSnapshot(rect);
+                                            }
+                                            catch
+                                            {
+                                            }
+                                            // reset the view for the next iteration
+                                            view.EraseAll();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                    }
+                    offDevice.EraseAll();
+                }
+            }
+            return blockBmp;
+        }
+        public static void SetViewTo(Autodesk.AutoCAD.GraphicsSystem.View view, Database db)
+        {
+            if (_extMax.Equals(Point3d.Origin) && _extMin.Equals(Point3d.Origin))
+            {
+                // just check we have valid extents
+                if (db.Extmax.X < db.Extmin.X || db.Extmax.Y < db.Extmin.Y || db.Extmax.Z < db.Extmax.Z)
+                {
+                    db.Extmin = new Point3d(0, 0, 0);
+                    db.Extmax = new Point3d(400, 400, 400);
+                }
+                // get the dwg extents
+                _extMax = db.Extmax;
+                _extMin = db.Extmin;
+            }
+
+            // now the active viewport info
+            double height = 0.0, width = 0.0, viewTwist = 0.0;
+            Point3d targetView = new Point3d();
+            Vector3d viewDir = new Vector3d();
+            GetActiveViewPortInfo(ref height, ref width, ref targetView, ref viewDir, ref viewTwist, true);
+            // from the data returned let's work out the viewmatrix
+            viewDir = viewDir.GetNormal();
+
+            Vector3d viewXDir = viewDir.GetPerpendicularVector().GetNormal();
+            viewXDir = viewXDir.RotateBy(viewTwist, -viewDir);
+            Vector3d viewYDir = viewDir.CrossProduct(viewXDir);
+            Point3d boxCenter = _extMin + 0.5 * (_extMax - _extMin);
+            Matrix3d viewMat;
+            viewMat = Matrix3d.AlignCoordinateSystem(boxCenter, Vector3d.XAxis, Vector3d.YAxis, Vector3d.ZAxis,
+            boxCenter, viewXDir, viewYDir, viewDir).Inverse();
+            Extents3d wcsExtents = new Extents3d(_extMin, _extMax);
+            Extents3d viewExtents = wcsExtents;
+            viewExtents.TransformBy(viewMat);
+            double xMax = System.Math.Abs(viewExtents.MaxPoint.X - viewExtents.MinPoint.X);
+            double yMax = System.Math.Abs(viewExtents.MaxPoint.Y - viewExtents.MinPoint.Y);
+            Point3d eye = boxCenter + viewDir;
+
+            view.SetView(eye, boxCenter, viewYDir, xMax, yMax);
+
+            view.Invalidate();
+            view.Update();
+        }
+        public static bool GetActiveViewPortInfo(ref double height, ref double width, ref Point3d target, ref Vector3d viewDir, ref double viewTwist, bool getViewCenter)
+        {
+            // get the editor object
+            Editor ed = Autodesk.AutoCAD.ApplicationServices.Application.DocumentManager.MdiActiveDocument.Editor;
+            ed.UpdateTiledViewportsInDatabase();
+            Database db = HostApplicationServices.WorkingDatabase;
+            using (Transaction t = db.TransactionManager.StartTransaction())
+            {
+                ViewportTable vt = (ViewportTable)t.GetObject(db.ViewportTableId, OpenMode.ForRead);
+                ViewportTableRecord btr = (ViewportTableRecord)t.GetObject(vt["*Active"], OpenMode.ForRead);
+                height = btr.Height;
+                width = btr.Width;
+                target = btr.Target;
+                viewDir = btr.ViewDirection;
+                viewTwist = btr.ViewTwist;
+                t.Commit();
+            }
+            return true;
+        }
     }
+
 }
